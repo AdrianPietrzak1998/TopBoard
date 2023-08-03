@@ -71,6 +71,8 @@ void Error_Handler(void);
 #define COMM_PC_LED_GPIO_Port GPIOC
 #define ERROR_LED_Pin GPIO_PIN_14
 #define ERROR_LED_GPIO_Port GPIOC
+#define FRONT_SWITCH_Pin GPIO_PIN_1
+#define FRONT_SWITCH_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 #define ERROR_DS ErrorCode.DsError = 1

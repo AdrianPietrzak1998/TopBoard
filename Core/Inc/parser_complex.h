@@ -10,7 +10,6 @@
 
 #define ENDLINE '^'
 
-extern uint8_t FanSpeed;
 
 /*
  * H_LED (H_VLAUE)
@@ -50,7 +49,7 @@ extern void SetLedMode(uint8_t Mode);
 extern void SetLedDelay(uint16_t Fx, uint16_t Blink);
 extern void SetLedRevDir(uint8_t Rev);
 extern void SetLedGamma(uint8_t Switch);
-extern void BootloaderJump(void);
+extern void BootloaderJump(uint16_t Code);
 
 //
 //

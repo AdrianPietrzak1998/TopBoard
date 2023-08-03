@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "dma.h"
+#include "iwdg.h"
 #include "tim.h"
 #include "usart.h"
 #include "usb_device.h"
@@ -40,12 +41,12 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+extern USBD_HandleTypeDef hUsbDeviceFS;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define CASE_OPEN_STATE HAL_GPIO_ReadPin(FRONT_SWITCH_GPIO_Port, FRONT_SWITCH_Pin)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -56,11 +57,15 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+const char Version[] = "1.0";
+
 volatile uint8_t CommandToJump = 0;
 
 int32_t Temp;
 float Temperature;
 uint8_t ds1[DS18B20_ROM_CODE_SIZE];
+uint16_t FanPwm;
+uint16_t FanSpeed;
 
 blink_t CommPcUsb, ErrorBlink;
 
@@ -75,7 +80,7 @@ uint8_t DataToTransmit;
 
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
-uint32_t OldTick500ms;
+uint32_t OldTick500ms, OldTick100ms, OldTick50ms, OldTick10000ms;
 
 volatile struct ErrorCode ErrorCode;
 /* USER CODE END PV */
@@ -83,7 +88,26 @@ volatile struct ErrorCode ErrorCode;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+void SetLedH(uint8_t Val);
+void SetLedS(uint8_t Val);
+void SetLedV(uint8_t Val);
+void SetLedMode(uint8_t Mode);
+void SetLedDelay(uint16_t Fx, uint16_t Blink);
+void SetLedRevDir(uint8_t Rev);
+void SetLedGamma(uint8_t Switch);
+
+void BootloaderJump(uint16_t Code);
+
+void IntervalFunc10000ms(void);
 void IntervalFunc500ms(void);
+void IntervalFunc100ms(void);
+void IntervalFunc50ms(void);
+
+//
+//Bootloader jump
+//
+void jump_to_application(uint32_t const app_address);
+void deinit_peripherals(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -96,16 +120,6 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 
 	}
 }
-
-void SetLedH(uint8_t Val);
-void SetLedS(uint8_t Val);
-void SetLedV(uint8_t Val);
-void SetLedMode(uint8_t Mode);
-void SetLedDelay(uint16_t Fx, uint16_t Blink);
-void SetLedRevDir(uint8_t Rev);
-void SetLedGamma(uint8_t Switch);
-
-void BootloaderJump(void);
 /* USER CODE END 0 */
 
 /**
@@ -115,7 +129,8 @@ void BootloaderJump(void);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-
+	__asm__ volatile("ldr r10, =0x0000");
+__enable_irq(); // turn on irq
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -141,10 +156,14 @@ int main(void)
   MX_TIM1_Init();
   MX_USART3_UART_Init();
   MX_TIM2_Init();
+  MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
+  OldTick500ms = HAL_GetTick();
+  OldTick100ms = HAL_GetTick();
+  OldTick50ms = HAL_GetTick();
+  OldTick10000ms = HAL_GetTick();
+
   led_gamma_correction_enebled = 1;
-
-
   ws28LedFxInit(30, 100, 150, 200, 255, 2, 1);
 
   if (ds18b20_read_address(ds1) != HAL_OK)
@@ -160,6 +179,18 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+
+	  HAL_IWDG_Refresh(&hiwdg);
+
+
+
+
+
+	  if(CommandToJump == 1)
+	  {
+		  jump_to_application(0x8000000);
+	  }
+
 	  if(LineCounter)
 	  {
 		  Parser_TakeLine(&ReceiveBuffer, ReceivedData);
@@ -187,7 +218,10 @@ int main(void)
 	  LedBlinkTask(&CommPcUsb);
 	  LedBlinkTask(&ErrorBlink);
 
+	  IntervalFunc100ms();
 	  IntervalFunc500ms();
+	  IntervalFunc50ms();
+	  IntervalFunc10000ms();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -208,10 +242,11 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
@@ -272,9 +307,58 @@ void SetLedGamma(uint8_t Switch)
 	led_gamma_correction_enebled = Switch;
 }
 
-void BootloaderJump(void)
+void BootloaderJump(uint16_t Code)
 {
+	if(Code == 1234)
 	CommandToJump = 1;
+}
+
+void IntervalFunc10000ms(void)
+{
+	if(HAL_GetTick() - OldTick10000ms >10000)
+	{
+		char MsgToSend[255];
+
+		sprintf(MsgToSend, "10/0x%lx%lx%lx/%s",
+				HAL_GetUIDw2(),
+				HAL_GetUIDw1(),
+				HAL_GetUIDw0(),
+				Version);
+		UsbBuffWrite(MsgToSend);
+		OldTick10000ms = HAL_GetTick();
+	}
+}
+
+void IntervalFunc100ms(void)
+{
+	if(HAL_GetTick() - OldTick100ms >100)
+	{
+		char MsgToSend[255];
+
+		sprintf(MsgToSend, "0/%u/%u/%u/%u/%u/%u/%u/%u",
+				ws28xxFx.h,
+				ws28xxFx.s,
+				ws28xxFx.v,
+				ws28xxFx.Mode,
+				ws28xxFx.FxDelay,
+				ws28xxFx.BlinkDelay,
+				ws28xxFx.ReverseDirection,
+				led_gamma_correction_enebled);
+		UsbBuffWrite(MsgToSend);
+
+//		char TemperatureBuff[8];
+//		Temperature100ToString(Temp, TemperatureBuff);
+
+		sprintf(MsgToSend, "1/%.2f/%u/%u/%u/%u",
+				Temperature,
+				FanPwm,
+				FanSpeed,
+				CASE_OPEN_STATE,
+				ErrorCode.Error);
+		UsbBuffWrite(MsgToSend);
+
+		OldTick100ms = HAL_GetTick();
+	}
 }
 
 void IntervalFunc500ms(void)
@@ -282,13 +366,6 @@ void IntervalFunc500ms(void)
 	  if(HAL_GetTick() - OldTick500ms >500)
 	  {
 		  OldTick500ms = HAL_GetTick();
-
-//		  if(M24C02.i2c -> State == HAL_I2C_STATE_READY)
-//		  {
-//			  m24cxxFullRead(&M24C02, EpromBufer);
-//		  }
-
-
 
 		  static uint8_t TempMeasureFlag = 0;
 		  if(!TempMeasureFlag)
@@ -303,10 +380,16 @@ void IntervalFunc500ms(void)
 			  Temperature = Temperature/100;
 			  TempMeasureFlag = 0;
 		  }
-
-		  UsbBuffWrite("Test\n");
-
 	  }
+}
+
+void IntervalFunc50ms(void)
+{
+	if(HAL_GetTick() - OldTick50ms >50)
+	{
+
+		OldTick50ms = HAL_GetTick();
+	}
 }
 
 void CDC_ReveiveCallback(uint8_t *Buffer, uint8_t Length)
@@ -382,6 +465,57 @@ void UsbTransmitTask(void)
 		} while(tmp != '^');
 
 		CDC_Transmit_FS(TransmitData, i);
+}
+
+void deinit_peripherals(void)
+{
+
+	__disable_irq();
+	NVIC_DisableIRQ(USB_LP_CAN1_RX0_IRQn);
+	USBD_Stop(&hUsbDeviceFS);
+	USBD_DeInit(&hUsbDeviceFS);
+	__HAL_RCC_USB_CLK_DISABLE();
+	memset(&hUsbDeviceFS, 0, sizeof(USBD_HandleTypeDef));
+
+	  HAL_GPIO_DeInit(COMM_PC_LED_GPIO_Port, COMM_PC_LED_Pin);
+	  HAL_GPIO_DeInit(ERROR_LED_GPIO_Port, ERROR_LED_Pin);
+	  HAL_GPIO_DeInit(FRONT_SWITCH_GPIO_Port, FRONT_SWITCH_Pin);
+	  //DMA Deinit
+	  __HAL_RCC_DMA1_CLK_DISABLE();
+	  HAL_NVIC_DisableIRQ(DMA1_Channel2_IRQn);
+	  //TIM Deinit
+	  __HAL_RCC_TIM1_CLK_DISABLE();
+	  __HAL_RCC_TIM2_CLK_DISABLE();
+
+	  HAL_UART_DeInit(&huart3);
+
+
+	  HAL_DeInit();
+
+	  IWDG->KR = 0xAAAA; //Unlock key Register
+	  IWDG->KR = 0x0000; //Deactive IWDG
+
+
+	  SysTick->CTRL = 0;
+	  SysTick->LOAD = 0;
+	  SysTick->VAL = 0;
+
+}
+
+void jump_to_application(uint32_t const app_address) {
+	for (uint8_t i = 0; i < 8; i++) {
+	        NVIC->ICER[i] = 0xFFFFFFFF;
+	    }
+  typedef void (*jumpFunction)(); // helper-typedef
+  uint32_t const jumpAddress = *(__IO uint32_t*) (app_address + 4); // Address of application's Reset Handler
+  jumpFunction runApplication =  jumpAddress; // Function we'll use to jump to application
+
+
+  deinit_peripherals(); // Deinitialization of peripherals and systick
+
+  __set_MSP(*((__IO uint32_t*) app_address)); // Stack pointer setup
+  __asm__ volatile("ldr r10, =0x1234");
+  runApplication(); // Jump to application
 }
 /* USER CODE END 4 */
 

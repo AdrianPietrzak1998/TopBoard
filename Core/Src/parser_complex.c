@@ -26,7 +26,7 @@ struct Command CommandMapper[] = {
 		{LED_DELAY, SetLedDelay, 2},
 		{REV_DIR_LED, SetLedRevDir, 1},
 		{GAMMA_CORECTION, SetLedGamma, 1},
-		{BOOTLOADER_JUMP, BootloaderJump, 0}
+		{BOOTLOADER_JUMP, BootloaderJump, 1}
 };
 
 void Parser_TakeLine(RingBuffer_t *Buff, uint8_t *Destination)
